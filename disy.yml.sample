@@ -1,0 +1,14 @@
+map:
+  ros1:
+    type: directory
+    path: /var/lib/disy/ros1
+  mk1:
+    type: address_list
+    routeros: ros1con
+
+routeros:
+  ros1con:
+    address: 192.168.88.1
+    port: 8728
+    username: admin
+    password: admin
