@@ -25,7 +25,7 @@ class AddressList(dict):
         self.by_id = {}
         self.routeros = routeros
         self.pattern = re.compile(pattern or r'.+_test$')
-        self.timeout = ['=timeout=%s' % kwargs['timeout']] if 'timeout' in kwargs else []
+        self.timeout = [('timeout', kwargs['timeout'])] if 'timeout' in kwargs else []
         self.update_event = threading.Event()
         super().__init__()
         threading.Thread(target=self._listen, daemon=True).start()
@@ -52,11 +52,12 @@ class AddressList(dict):
         with self.routeros as client:
             self.clear()
             self.by_id.clear()
-            for d in client.talk(['/ip/firewall/address-list/getall',
-                                  '=.proplist=.id,address,list']).values():
+            res = client.get_resource('/ip/firewall/address-list')
+            cmd = res.call_async('getall', {'.proplist': '.id,address,list'})
+            for d in cmd:
                 if self.pattern.match(d['list']):
                     super().__setitem__(d['address'], d)
-                    self.by_id[d['.id']] = d
+                    self.by_id[d['id']] = d
 
     def __getitem__(self, address: str):
         return super().__getitem__(address)['list']
@@ -68,11 +69,14 @@ class AddressList(dict):
             # 'address' is not on self yet.
             # Add it.
             with self.routeros as client:
-                i = client.talk(['/ip/firewall/address-list/add',
-                                 '=address=%s' % address,
-                                 '=list=%s' % list_name]
-                                + self.timeout)
-                d = {'.id': i,
+                res = client.get_binary_resource('/ip/firewall/address-list')
+                kwargs = {k: str(v).encode() for k, v in
+                          [('address', address),
+                           ('list', list_name)] +
+                          self.timeout}
+                rep = res.add(**kwargs)
+                i = rep.done_message['ret'].decode()
+                d = {'id': i,
                      'address': address,
                      'list': list_name}
                 super().__setitem__(address, d)
@@ -83,20 +87,22 @@ class AddressList(dict):
             # Set it if it belongs to a different list.
             if d['list'] != list_name:
                 with self.routeros as client:
-                    client.talk(['/ip/firewall/address-list/set',
-                                 '=.id=%s' % d['.id'],
-                                 '=list=%s' % list_name]
-                                + self.timeout)
+                    res = client.get_binary_resource('/ip/firewall/address-list')
+                    kwargs = {k: str(v).encode() for k, v in
+                              [('id', d['id']),
+                               ('list', list_name)] +
+                              self.timeout}
+                    res.set(**kwargs)
                     d['list'] = list_name
                     log.debug('Updated %r', d)
 
     def __delitem__(self, address: str):
         d = super().__getitem__(address)
         with self.routeros as client:
-            client.talk(['/ip/firewall/address-list/remove',
-                         '=.id=%s' % d['.id']])
+            res = client.get_binary_resource('/ip/firewall/address-list')
+            res.remove(id=d['id'].encode())
             super().__delitem__(address)
-            del self.by_id[d['.id']]
+            del self.by_id[d['id']]
             log.debug('Removed %r', d)
 
     def _listen(self) -> None:
@@ -105,17 +111,18 @@ class AddressList(dict):
         """
         while True:
             try:
-                with self.routeros.copy() as client:
+                with self.routeros as client:
                     self.update_event.set()
-                    for d in client.listen(['/ip/firewall/address-list/listen',
-                                            '=.proplist=.id,.dead,address,list']):
+                    res = client.get_binary_resource('/ip/firewall/address-list')
+                    cmd = res.call_async('listen', {'.proplist': '.id,.dead,address,list'.encode()})
+                    for d in cmd:
                         log.debug('Received %r', d)
                         try:
                             # Record has been deleted.
-                            if '.dead' in d:
-                                if d['.id'] not in self.by_id:
+                            if 'dead' in d:
+                                if d['id'] not in self.by_id:
                                     log.debug('ID %r not found',
-                                              d['.id'])
+                                              d['id'])
                                     continue
                             # Record has been added or modified.
                             else:
