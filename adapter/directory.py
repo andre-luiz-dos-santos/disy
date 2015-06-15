@@ -55,6 +55,9 @@ class Directory(dict):
                 self.fetch()
                 return True
 
+    def flush(self):
+        pass
+
     def fetch(self):
         self.clear()
         for key in os.listdir(self.path):

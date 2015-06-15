@@ -52,6 +52,8 @@ class Synchronizer:
         for key in tuple(self.dest.keys()):
             if key not in self.source:
                 del self.dest[key]
+        # Wait for all updates to complete.
+        self.dest.flush()
 
     def watch(self):
         """

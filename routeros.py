@@ -37,8 +37,7 @@ class Client:
             if self.close_on_exit is True \
                     or (exc_type is not None
                         and issubclass(exc_type, tikapy.ClientError)):
-                self.connection.disconnect()
-                self.connection = None
+                self.disconnect()
         finally:
             self.semaphore.release()
 
@@ -58,3 +57,9 @@ class Client:
         """
         self.connection = tikapy.TikapyClient(*self.address)
         self.connection.login(self.username, self.password)
+
+    def disconnect(self):
+        try:
+            self.connection.disconnect()
+        finally:
+            self.connection = None
