@@ -1,4 +1,5 @@
 # coding=utf-8
+from collections import OrderedDict
 import re
 import logging
 import threading
@@ -28,18 +29,21 @@ def sentence_to_dict(sentence: list) -> dict:
     return attrs
 
 
-class AddressList(dict):
+class AddressList(OrderedDict):
     """
     Maintains a local copy of /ip firewall address-list.
     """
 
     def __init__(self, routeros=None, pattern: str=None, **kwargs):
         self.by_id = {}
+        self.removed_ids = None  # used during /getall
         self.next_tag = 0
         self.routeros = routeros
         self.pattern = re.compile(pattern or r'.+_test$')
         self.timeout = ['=timeout=%s' % kwargs['timeout']] if 'timeout' in kwargs else []
         self.update_event = threading.Event()
+        self.fetch_event = threading.Event()
+        self.fetch_event.set()  # When set, /getall is NOT running
         super().__init__()
         self.commands = {}
         self.commands_update = threading.Condition()
@@ -55,6 +59,7 @@ class AddressList(dict):
         log.debug("Waiting for updates.")
         self.update_event.wait()
         self.update_event.clear()
+        self.fetch_event.wait()
         log.debug("Reporting update.")
         return True
 
@@ -75,10 +80,15 @@ class AddressList(dict):
         with self.routeros as client:
             self.clear()
             self.by_id.clear()
+            self.removed_ids = set()
+            self.fetch_event.clear()
             cmd = ['/ip/firewall/address-list/getall',
                    '=.proplist=.id,address,list',
                    '.tag=FETCH']
             client._api.write_sentence(cmd)
+
+    def is_fetch_running(self):
+        return not self.fetch_event.is_set()
 
     def write_listen(self) -> None:
         log.debug("Writing listen command.")
@@ -128,7 +138,7 @@ class AddressList(dict):
 
     def handle_sentence(self, d: dict):
         if '!fatal' in d:
-            log.error("Error from RouterOS: %r", dict(d))
+            log.error("Error from RouterOS: %r", d)
         elif '.tag' in d:
             if d['.tag'] == 'FETCH':
                 self.handle_fetch_sentence(d)
@@ -145,9 +155,9 @@ class AddressList(dict):
                 else:
                     c[0](c[1], d)
             else:
-                log.debug("Unknown sentence: %r", dict(d))
+                log.debug("Unknown sentence: %r", d)
         else:
-            log.debug("Sentence missing .tag: %r", dict(d))
+            log.debug("Sentence missing .tag: %r", d)
 
     def handle_fetch_sentence(self, d):
         """
@@ -159,13 +169,20 @@ class AddressList(dict):
         """
         if '!done' in d:
             log.debug("Done fetching.")
+            self.removed_ids = None
+            self.fetch_event.set()
             self.update_event.set()
         elif '!re' in d:
-            if self.pattern.match(d['list']):
-                super().__setitem__(d['address'], d)
-                self.by_id[d['.id']] = d
+            if d['address'] in self:
+                return  # /listen already provided this item
+            if d['.id'] in self.removed_ids:
+                return  # /listen reported this ID as removed
+            if not self.pattern.match(d['list']):
+                return
+            super().__setitem__(d['address'], d)
+            self.by_id[d['.id']] = d
         else:
-            log.debug("Invalid FETCH-tagged sentence: %r", dict(d))
+            log.debug("Invalid FETCH-tagged sentence: %r", d)
 
     def handle_listen_sentence(self, d):
         """
@@ -180,7 +197,7 @@ class AddressList(dict):
         elif 'address' in d and 'list' in d:
             self.handle_remote_addition(d)
         else:
-            log.debug("Invalid LISTEN-tagged sentence: %r", dict(d))
+            log.debug("Invalid LISTEN-tagged sentence: %r", d)
 
     def handle_remote_addition(self, sentence):
         """
@@ -195,12 +212,12 @@ class AddressList(dict):
                  'list': sentence['list']}
             super().__setitem__(d['address'], d)
             self.by_id[_id_] = d
-            log.debug("Item remotely added: %r", dict(d))
+            log.debug("Item remotely added: %r", d)
             self.update_event.set()
         else:
             if d['list'] != sentence['list']:
                 d['list'] = sentence['list']
-                log.debug("Item remotely changed: %r", dict(d))
+                log.debug("Item remotely changed: %r", d)
                 self.update_event.set()
 
     def handle_remote_removal(self, d):
@@ -210,7 +227,7 @@ class AddressList(dict):
         try:
             d = self.by_id[d['.id']]
         except KeyError:
-            pass
+            self.removed_ids.add(d['.id'])
         else:
             log.debug("Item remotely removed: %r", dict(self.by_id[d['.id']]))
             super().__delitem__(d['address'])
@@ -228,7 +245,7 @@ class AddressList(dict):
              'list': c[1]}
         super().__setitem__(d['address'], d)
         self.by_id[_id_] = d
-        log.debug("Item added: %r", dict(d))
+        log.debug("Item added: %r", d)
 
     def handle_set_response(self, c: tuple, sentence: dict):
         """
@@ -238,7 +255,7 @@ class AddressList(dict):
         _id_, list_name = c
         d = self.by_id[_id_]
         d['list'] = list_name
-        log.debug("Item changed: %r", dict(d))
+        log.debug("Item changed: %r", d)
 
     def handle_remove_response(self, c: tuple, sentence: dict):
         """
@@ -289,6 +306,8 @@ class AddressList(dict):
         """
         while True:
             try:
+                with self.routeros:
+                    self.routeros.disconnect()
                 self.write_listen()
                 self.write_fetch()
                 while True:
@@ -296,4 +315,3 @@ class AddressList(dict):
             except Exception:
                 log.exception('Error while reading RouterOS API sentences')
                 time.sleep(1)
-                self.routeros.disconnect()

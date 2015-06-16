@@ -10,6 +10,7 @@ def wrap_dict(obj):
     mock_obj.__getitem__.side_effect = obj.__getitem__
     mock_obj.__setitem__.side_effect = obj.__setitem__
     mock_obj.__delitem__.side_effect = obj.__delitem__
+    mock_obj.flush = mock.Mock()
     return mock_obj
 
 

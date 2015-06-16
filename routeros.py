@@ -61,5 +61,7 @@ class Client:
     def disconnect(self):
         try:
             self.connection.disconnect()
+        except Exception:
+            pass
         finally:
             self.connection = None
