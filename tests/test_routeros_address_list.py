@@ -22,7 +22,7 @@ class AddressListDict(unittest.TestCase):
 
         routeros = mock.MagicMock()
         subject = adapter.AddressList(routeros)
-        subject.write_fetch()
+        subject.enter_fetch_mode()
 
         subject.handle_sentence(fetch_1)
         self.assertListEqual(list(subject.values()), ['list_name_1_test'])
@@ -49,7 +49,7 @@ class AddressListDict(unittest.TestCase):
 
         routeros = mock.MagicMock()
         subject = adapter.AddressList(routeros)
-        subject.write_fetch()
+        subject.enter_fetch_mode()
 
         subject.handle_sentence(fetch_1)
         self.assertListEqual(list(subject.values()), ['list_name_1_test'])
@@ -75,7 +75,7 @@ class AddressListDict(unittest.TestCase):
 
         routeros = mock.MagicMock()
         subject = adapter.AddressList(routeros)
-        subject.write_fetch()
+        subject.enter_fetch_mode()
 
         subject.handle_sentence(listen_1)
         self.assertListEqual(list(subject.values()), ['list_name_1_test'])

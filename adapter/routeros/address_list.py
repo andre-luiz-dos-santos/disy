@@ -4,6 +4,7 @@ import re
 import logging
 import threading
 import time
+from adapter.base import ThreadedBase, Error
 
 __all__ = (
     'AddressList',
@@ -11,10 +12,6 @@ __all__ = (
 )
 
 log = logging.getLogger(__name__)
-
-
-class Error(Exception):
-    pass
 
 
 def sentence_to_dict(sentence: list) -> dict:
@@ -29,7 +26,7 @@ def sentence_to_dict(sentence: list) -> dict:
     return attrs
 
 
-class AddressList(OrderedDict):
+class AddressList(ThreadedBase, OrderedDict):
     """
     Maintains a local copy of /ip firewall address-list.
     """
@@ -42,8 +39,6 @@ class AddressList(OrderedDict):
         self.pattern = re.compile(pattern or r'.+_test$')
         self.timeout = ['=timeout=%s' % kwargs['timeout']] if 'timeout' in kwargs else []
         self.update_event = threading.Event()
-        self.fetch_event = threading.Event()
-        self.fetch_event.set()  # When set, /getall is NOT running
         super().__init__()
         self.commands = {}
         self.commands_update = threading.Condition()
@@ -59,7 +54,6 @@ class AddressList(OrderedDict):
         log.debug("Waiting for updates.")
         self.update_event.wait()
         self.update_event.clear()
-        self.fetch_event.wait()
         log.debug("Reporting update.")
         return True
 
@@ -78,17 +72,34 @@ class AddressList(OrderedDict):
     def write_fetch(self) -> None:
         log.debug("Writing getall command.")
         with self.routeros as client:
-            self.clear()
-            self.by_id.clear()
-            self.removed_ids = set()
-            self.fetch_event.clear()
             cmd = ['/ip/firewall/address-list/getall',
                    '=.proplist=.id,address,list',
                    '.tag=FETCH']
             client._api.write_sentence(cmd)
 
-    def is_fetch_running(self):
-        return not self.fetch_event.is_set()
+    def enter_fetch_mode(self):
+        if self.in_fetch_mode():
+            log.debug("Already in fetch mode.")
+        else:
+            log.debug("Acquiring adapter lock.")
+            self.lock.acquire()
+        self.clear()
+        self.by_id.clear()
+        self.removed_ids = set()
+        # No commands should be run in fetch mode.
+        # If any threads were waiting on flush(), notify them.
+        with self.commands_update:
+            self.commands.clear()
+            self.commands_update.notify_all()
+
+    def in_fetch_mode(self):
+        return self.removed_ids is not None
+
+    def exit_fetch_mode(self):
+        self.removed_ids = None
+        self.lock.release()
+        log.debug("Adapter lock released.")
+        self.update_event.set()
 
     def write_listen(self) -> None:
         log.debug("Writing listen command.")
@@ -149,7 +160,7 @@ class AddressList(OrderedDict):
                     with self.commands_update:
                         c = self.commands.pop(d['.tag'])
                         if len(self.commands) == 0:
-                            self.commands_update.notify()
+                            self.commands_update.notify_all()
                 except KeyError:
                     log.debug("Unknown tag %r", d['.tag'])
                 else:
@@ -169,9 +180,7 @@ class AddressList(OrderedDict):
         """
         if '!done' in d:
             log.debug("Done fetching.")
-            self.removed_ids = None
-            self.fetch_event.set()
-            self.update_event.set()
+            self.exit_fetch_mode()
         elif '!re' in d:
             if d['address'] in self:
                 return  # /listen already provided this item
@@ -276,16 +285,10 @@ class AddressList(OrderedDict):
             d = super().__getitem__(address)
         except KeyError:
             tag = self.write_add(address, list_name)
-            self.commands[tag] = (
-                self.handle_add_response,
-                (address, list_name)
-            )
+            self.commands[tag] = (self.handle_add_response, (address, list_name))
         else:
             tag = self.write_set(d['.id'], list_name)
-            self.commands[tag] = (
-                self.handle_set_response,
-                (d['.id'], list_name)
-            )
+            self.commands[tag] = (self.handle_set_response, (d['.id'], list_name))
 
     def __delitem__(self, address: str):
         log.debug('%r' % (address,))
@@ -295,23 +298,18 @@ class AddressList(OrderedDict):
             pass
         else:
             tag = self.write_remove(d['.id'])
-            self.commands[tag] = (
-                self.handle_remove_response,
-                (d['.id'], address)
-            )
+            self.commands[tag] = (self.handle_remove_response, (d['.id'], address))
 
     def _reader(self) -> None:
-        """
-        Read and process RouterOS sentences.
-        """
         while True:
             try:
-                with self.routeros:
-                    self.routeros.disconnect()
+                with self.routeros(connect=True):
+                    self.enter_fetch_mode()
                 self.write_listen()
                 self.write_fetch()
                 while True:
                     self.read_sentence()
             except Exception:
-                log.exception('Error while reading RouterOS API sentences')
+                log.exception("Error in RouterOS reading thread.")
+                self.routeros.disconnect()
                 time.sleep(1)

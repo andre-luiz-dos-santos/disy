@@ -5,6 +5,7 @@ import re
 import logging
 import stat
 import time
+from adapter.base import Base, Error
 
 __all__ = (
     'Directory',
@@ -15,15 +16,11 @@ __all__ = (
 log = logging.getLogger(__name__)
 
 
-class Error(Exception):
-    pass
-
-
 class FileNotSymlinkError(Error):
     pass
 
 
-class Directory(dict):
+class Directory(Base, dict):
     """
     Access to directory.
     """
@@ -54,9 +51,6 @@ class Directory(dict):
             if self.changed():
                 self.fetch()
                 return True
-
-    def flush(self):
-        pass
 
     def fetch(self):
         self.clear()

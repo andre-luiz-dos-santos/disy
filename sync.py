@@ -43,17 +43,18 @@ class Synchronizer:
         """
         Synchronize 'source' with 'dest'.
         """
-        # Add / Update.
-        for key, value in self.source.items():
-            if key not in self.dest or self.dest[key] != value:
-                self.dest[key] = value
-        # Remove.
-        # Use 'tuple' to copy the keys, so that 'dest' may be modified within the for loop.
-        for key in tuple(self.dest.keys()):
-            if key not in self.source:
-                del self.dest[key]
-        # Wait for all updates to complete.
-        self.dest.flush()
+        with self.source, self.dest:
+            # Add / Update.
+            for key, value in self.source.items():
+                if key not in self.dest or self.dest[key] != value:
+                    self.dest[key] = value
+            # Remove.
+            # Use 'tuple' to copy the keys, so that 'dest' may be modified within the for loop.
+            for key in tuple(self.dest.keys()):
+                if key not in self.source:
+                    del self.dest[key]
+            # Wait for all updates to complete.
+            self.dest.flush()
 
     def watch(self):
         """

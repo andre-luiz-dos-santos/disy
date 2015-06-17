@@ -2,7 +2,16 @@
 import unittest
 from unittest import mock
 import collections
+import adapter
 import sync
+
+
+class BaseDict(adapter.Base, dict):
+    pass
+
+
+class BaseOrderedDict(adapter.Base, collections.OrderedDict):
+    pass
 
 
 def wrap_dict(obj):
@@ -20,23 +29,23 @@ class DictSynchronization(unittest.TestCase):
     """
 
     def test_add_1(self):
-        s, d = {'1.2.3.4': 'a_test'}, wrap_dict({})
+        s, d = BaseDict({'1.2.3.4': 'a_test'}), wrap_dict({})
         sync.Synchronizer(s, d).synchronize()
         d.__setitem__.assert_called_once_with('1.2.3.4', 'a_test')
 
     def test_remove_1(self):
-        s, d = {}, wrap_dict({'1.2.3.4': 'a_test'})
+        s, d = BaseDict({}), wrap_dict({'1.2.3.4': 'a_test'})
         sync.Synchronizer(s, d).synchronize()
         d.__delitem__.assert_called_once_with('1.2.3.4')
 
     def test_set_1(self):
-        s, d = {'1.2.3.4': 'a_test'}, wrap_dict({'1.2.3.4': 'b_test'})
+        s, d = BaseDict({'1.2.3.4': 'a_test'}), wrap_dict({'1.2.3.4': 'b_test'})
         sync.Synchronizer(s, d).synchronize()
         d.__setitem__.assert_called_once_with('1.2.3.4', 'a_test')
 
     def test_add_and_remove_1(self):
-        remote = collections.OrderedDict([('5.4.3.2', 'b_test'), ('9.9.9.9', 'old')])
-        local = collections.OrderedDict([('1.2.3.4', 'a_test'), ('9.9.9.9', 'new')])
+        remote = BaseOrderedDict([('5.4.3.2', 'b_test'), ('9.9.9.9', 'old')])
+        local = BaseOrderedDict([('1.2.3.4', 'a_test'), ('9.9.9.9', 'new')])
         remote_mock = wrap_dict(remote)
         sync.Synchronizer(local, remote_mock).synchronize()
         remote_mock.assert_has_calls([
